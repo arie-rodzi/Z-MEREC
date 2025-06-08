@@ -52,20 +52,29 @@ if uploaded_file:
 
     if st.button("Calculate"):
         # Step 2: Normalization
-        norm_data = pd.DataFrame(index=data.index, columns=data.columns)
-        for i, c in enumerate(criteria):
-            x = data[c].astype(float)
-            if criterion_types[i] == "Benefit":
-                norm = (x - x.min()) / (x.max() - x.min())
-            elif criterion_types[i] == "Cost":
-                norm = (x.max() - x) / (x.max() - x.min())
-            elif criterion_types[i] == "Target":
-                target = target_values[i]
-                d = abs(x - target)
-                d_max = d.max()
-                norm = 1 - (d / d_max)
-            norm = norm.replace(0, 0.001)  # avoid zero in next steps
-            norm_data[c] = norm
+       norm_data = pd.DataFrame(index=data.index, columns=data.columns)
+
+for i, c in enumerate(criteria):
+    x = data[c].astype(float)
+    
+    if criterion_types[i] == "Benefit":
+        max_val = x.max()
+        norm = x / max_val if max_val != 0 else 0
+
+    elif criterion_types[i] == "Cost":
+        min_val = x.min()
+        norm = min_val / x.replace(0, np.nan)
+        norm = norm.fillna(0)
+
+    elif criterion_types[i] == "Target":
+        target = target_values[i]
+        d = abs(x - target)
+        d_max = d.max()
+        norm = 1 - (d / d_max) if d_max != 0 else 1
+
+    norm = norm.replace(0, 0.001)  # avoid zero for stability
+    norm_data[c] = norm
+
 
         st.subheader("Step 2: Normalized Data")
         st.dataframe(norm_data, use_container_width=True)
