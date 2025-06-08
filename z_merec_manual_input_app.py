@@ -1,92 +1,92 @@
-import textwrap
+import streamlit as st
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from io import BytesIO
 
-# Recreate the fixed Streamlit app code after code state reset
-streamlit_app_code = textwrap.dedent("""
-    import streamlit as st
-    import pandas as pd
-    import numpy as np
-    import matplotlib.pyplot as plt
-    from io import BytesIO
+st.set_page_config(page_title="Z-MEREC Weighting", layout="wide")
 
-    st.title("Z-MEREC: Objective Weight Calculator")
+st.title("Z-MEREC Manual Input Weighting App")
 
-    uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
-    if uploaded_file:
-        df = pd.read_excel(uploaded_file)
-        st.write("### Uploaded Data", df)
+st.markdown("Upload a CSV file with **alternatives as rows and criteria as columns**.")
 
-        criteria = df.columns[1:]
-        st.write("### Define Criterion Types")
-        criterion_types = {}
-        target_values = {}
+uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    st.subheader("Raw Data")
+    st.dataframe(df)
 
-        for crit in criteria:
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                crit_type = st.selectbox(f"Type for {crit}", ["Benefit", "Cost", "Target"])
-            with col2:
-                target_val = None
-                if crit_type == "Target":
-                    target_val = st.number_input(f"Target value for {crit}", value=float(df[crit].mean()))
-            criterion_types[crit] = crit_type
-            if crit_type == "Target":
-                target_values[crit] = target_val
+    col_names = df.columns.tolist()
+    st.markdown("### Step 1: Define Criteria Types")
+    criteria_types = []
+    target_values = []
 
-        if st.button("Calculate Z-MEREC Weights"):
-            data = df.copy()
-            norm_data = pd.DataFrame(index=data.index)
+    for col in col_names[1:]:  # Exclude alternative name
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            ctype = st.selectbox(
+                f"Criteria Type for **{col}**", ["Benefit", "Cost", "Target"], key=col
+            )
+        with col2:
+            tval = st.number_input(f"Target (if applicable)", value=0.0, step=0.01, key=f"target_{col}")
+        criteria_types.append(ctype)
+        target_values.append(tval if ctype == "Target" else None)
 
-            for crit in criteria:
-                col = data[crit]
-                if criterion_types[crit] == "Benefit":
-                    norm = (col - col.min()) / (col.max() - col.min())
-                elif criterion_types[crit] == "Cost":
-                    norm = (col.max() - col) / (col.max() - col.min())
-                elif criterion_types[crit] == "Target":
-                    target = target_values[crit]
-                    dev = abs(col - target)
-                    max_dev = dev.max()
-                    norm = 1 - dev / max_dev if max_dev != 0 else 1
-                norm_data[crit] = norm.replace(0, 0.001)  # Prevent zero drop effect
+    # Step 2: Normalize
+    st.markdown("### Step 2: Z-MEREC Calculation")
+    data = df.iloc[:, 1:].astype(float).values  # numeric values only
+    alt_names = df.iloc[:, 0].values
+    n_criteria = data.shape[1]
 
-            S = norm_data.sum(axis=1)
-            E = {}
+    norm_data = np.zeros_like(data)
 
-            for crit in criteria:
-                S_prime = S - norm_data[crit]
-                E[crit] = sum(abs(S - S_prime))
+    for j in range(n_criteria):
+        col = data[:, j]
+        if criteria_types[j] == "Benefit":
+            norm_data[:, j] = col / np.max(col)
+        elif criteria_types[j] == "Cost":
+            norm_data[:, j] = np.min(col) / col
+        elif criteria_types[j] == "Target":
+            T = target_values[j]
+            norm_data[:, j] = 1 / (1 + abs(col - T) / (np.max(col) - np.min(col) + 1e-8))
 
-            total_E = sum(E.values())
-            weights = {crit: E[crit] / total_E for crit in criteria}
-            weights_df = pd.DataFrame(weights.items(), columns=["Criterion", "Weight"]).sort_values(by="Weight", ascending=False)
+    # Step 3: Removal effect
+    removal_scores = []
+    full_score = np.sum(norm_data, axis=1)
+    for j in range(n_criteria):
+        temp = np.delete(norm_data, j, axis=1)
+        temp_score = np.sum(temp, axis=1)
+        diff = full_score - temp_score
+        removal_scores.append(np.mean(diff))
 
-            st.write("### Objective Weights", weights_df)
+    weights = np.array(removal_scores)
+    weights = weights / np.sum(weights)
 
-            # Plot
-            fig, ax = plt.subplots()
-            ax.bar(weights_df["Criterion"], weights_df["Weight"])
-            ax.set_ylabel("Weight")
-            ax.set_title("Z-MEREC Criterion Weights")
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
+    # Output weights
+    weight_df = pd.DataFrame({
+        "Criteria": col_names[1:],
+        "Type": criteria_types,
+        "Target": [t if t is not None else "-" for t in target_values],
+        "Weight": weights
+    })
 
-            # Download options
-            csv = weights_df.to_csv(index=False).encode("utf-8")
-            st.download_button("Download Weights CSV", csv, "weights.csv", "text/csv")
+    st.markdown("### Step 3: Results")
+    st.dataframe(weight_df)
 
-            buffer = BytesIO()
-            fig.savefig(buffer, format="png")
-            st.download_button("Download Chart PNG", buffer.getvalue(), "weights_chart.png", "image/png")
-""")
+    # Bar chart
+    st.markdown("### Step 4: Criteria Weight Plot")
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(weight_df["Criteria"], weight_df["Weight"], color="orange")
+    ax.set_ylabel("Weight")
+    ax.set_title("Z-MEREC Criteria Weights")
+    st.pyplot(fig)
 
-# Save to file
-file_path = "/mnt/data/z_merec_app_fixed.py"
-import io
+    # Download section
+    st.markdown("### Step 5: Download Results")
+    csv = weight_df.to_csv(index=False).encode()
+    st.download_button("Download Weights CSV", data=csv, file_name="zmerec_weights.csv", mime="text/csv")
 
-buffer = io.BytesIO()
-buffer.write(content.encode())
-st.download_button("Download CSV", buffer.getvalue(), "z_merec_weights.csv", "text/csv")
-
-    f.write(streamlit_app_code)
-
-file_path
+    # Download plot
+    buf = BytesIO()
+    fig.savefig(buf, format="png")
+    st.download_button("Download Weight Plot (PNG)", data=buf.getvalue(), file_name="zmerec_plot.png", mime="image/png")
