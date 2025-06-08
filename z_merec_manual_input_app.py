@@ -1,74 +1,87 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+import textwrap
 
-st.title("Z-MEREC Objective Weight Calculator")
+# Recreate the fixed Streamlit app code after code state reset
+streamlit_app_code = textwrap.dedent("""
+    import streamlit as st
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from io import BytesIO
 
-# File upload
-uploaded_file = st.file_uploader("Upload Excel file with stock data", type=["xlsx"])
+    st.title("Z-MEREC: Objective Weight Calculator")
 
-if uploaded_file:
-    df = pd.read_excel(uploaded_file)
-    st.write("### Preview of Uploaded Data")
-    st.dataframe(df.head())
+    uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
+    if uploaded_file:
+        df = pd.read_excel(uploaded_file)
+        st.write("### Uploaded Data", df)
 
-    with st.form("criteria_form"):
-        st.write("### Define Criteria Types and Target Values")
-
-        criteria_types = {}
+        criteria = df.columns[1:]
+        st.write("### Define Criterion Types")
+        criterion_types = {}
         target_values = {}
 
-        for col in df.columns[1:]:
-            c_type = st.selectbox(f"Criterion type for '{col}'", ["Benefit", "Cost", "Target"], key=f"type_{col}")
-            criteria_types[col] = c_type
-            if c_type == "Target":
-                target_values[col] = st.number_input(f"Target value for '{col}'", key=f"target_{col}")
-
-        submitted = st.form_submit_button("Calculate Weights")
-
-    if submitted:
-        data = df.copy()
-        criteria = data.columns[1:]
-        norm_data = pd.DataFrame(index=data.index)
-
         for crit in criteria:
-            values = data[crit]
-            if criteria_types[crit] == "Benefit":
-                norm = (values - values.min()) / (values.max() - values.min())
-            elif criteria_types[crit] == "Cost":
-                norm = (values.max() - values) / (values.max() - values.min())
-            elif criteria_types[crit] == "Target":
-                target = target_values[crit]
-                deviation = abs(values - target)
-                max_dev = deviation.max()
-                norm = 1 - deviation / max_dev
-            norm_data[crit] = norm.fillna(0)
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                crit_type = st.selectbox(f"Type for {crit}", ["Benefit", "Cost", "Target"])
+            with col2:
+                target_val = None
+                if crit_type == "Target":
+                    target_val = st.number_input(f"Target value for {crit}", value=float(df[crit].mean()))
+            criterion_types[crit] = crit_type
+            if crit_type == "Target":
+                target_values[crit] = target_val
 
-        S = norm_data.sum(axis=1)
-        removal_effects = {}
+        if st.button("Calculate Z-MEREC Weights"):
+            data = df.copy()
+            norm_data = pd.DataFrame(index=data.index)
 
-        for crit in criteria:
-            S_removed = norm_data.drop(columns=[crit]).sum(axis=1)
-            removal_effects[crit] = np.sum(abs(S - S_removed))
+            for crit in criteria:
+                col = data[crit]
+                if criterion_types[crit] == "Benefit":
+                    norm = (col - col.min()) / (col.max() - col.min())
+                elif criterion_types[crit] == "Cost":
+                    norm = (col.max() - col) / (col.max() - col.min())
+                elif criterion_types[crit] == "Target":
+                    target = target_values[crit]
+                    dev = abs(col - target)
+                    max_dev = dev.max()
+                    norm = 1 - dev / max_dev if max_dev != 0 else 1
+                norm_data[crit] = norm.replace(0, 0.001)  # Prevent zero drop effect
 
-        total_effect = sum(removal_effects.values())
-        weights = {crit: val / total_effect for crit, val in removal_effects.items()}
+            S = norm_data.sum(axis=1)
+            E = {}
 
-        st.write("### Calculated Weights")
-        weight_df = pd.DataFrame.from_dict(weights, orient='index', columns=['Weight'])
-        st.dataframe(weight_df)
+            for crit in criteria:
+                S_prime = S - norm_data[crit]
+                E[crit] = sum(abs(S - S_prime))
 
-        # Plot
-        fig, ax = plt.subplots()
-        weight_df.sort_values(by='Weight', ascending=False).plot(kind='bar', ax=ax, legend=False)
-        ax.set_title("Objective Weights by Z-MEREC")
-        ax.set_ylabel("Weight")
-        ax.set_xlabel("Criteria")
-        st.pyplot(fig)
+            total_E = sum(E.values())
+            weights = {crit: E[crit] / total_E for crit in criteria}
+            weights_df = pd.DataFrame(weights.items(), columns=["Criterion", "Weight"]).sort_values(by="Weight", ascending=False)
 
-        # Download links
-        st.download_button("Download Weights as CSV", weight_df.to_csv().encode('utf-8'), file_name='z_merec_weights.csv', mime='text/csv')
-        fig.savefig("z_merec_weights.png")
-        with open("z_merec_weights.png", "rb") as f:
-            st.download_button("Download Weight Chart as PNG", f, file_name="z_merec_weights.png")
+            st.write("### Objective Weights", weights_df)
+
+            # Plot
+            fig, ax = plt.subplots()
+            ax.bar(weights_df["Criterion"], weights_df["Weight"])
+            ax.set_ylabel("Weight")
+            ax.set_title("Z-MEREC Criterion Weights")
+            plt.xticks(rotation=45)
+            st.pyplot(fig)
+
+            # Download options
+            csv = weights_df.to_csv(index=False).encode("utf-8")
+            st.download_button("Download Weights CSV", csv, "weights.csv", "text/csv")
+
+            buffer = BytesIO()
+            fig.savefig(buffer, format="png")
+            st.download_button("Download Chart PNG", buffer.getvalue(), "weights_chart.png", "image/png")
+""")
+
+# Save to file
+file_path = "/mnt/data/z_merec_app_fixed.py"
+with open(file_path, "w") as f:
+    f.write(streamlit_app_code)
+
+file_path
