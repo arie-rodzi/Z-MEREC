@@ -2,83 +2,114 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import base64
 
-st.set_page_config(page_title="Z-MEREC Decision Support", layout="wide")
+st.set_page_config(page_title="Z-MEREC Calculator", layout="wide")
+st.title("Z-MEREC Objective Weighting Tool")
 
-st.title("Z-MEREC: Manual Criteria Type and Target-Based Weighting")
+st.markdown("""
+This tool calculates **objective weights** for multiple criteria using the **Improvised MEREC (Z-MEREC)** method. 
+You can upload an Excel file containing performance values and define:
+- Type of each criterion (Benefit, Cost, or Target)
+- Target value (only for Target-Optimal type)
 
-uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx"])
+Then, click `Calculate` to compute and visualize the results.
+""")
+
+uploaded_file = st.file_uploader("Upload Excel File (First row: Stock Names, Columns: Criteria)", type=[".xlsx"])
+
 if uploaded_file:
     df = pd.read_excel(uploaded_file)
-    st.write("### Uploaded Data")
-    st.dataframe(df)
+    st.subheader("Raw Data Preview")
+    st.dataframe(df, use_container_width=True)
 
-    with st.form("criteria_form"):
-        st.subheader("Step 1: Define Criteria Type and Targets")
-        criteria = df.columns[1:]
-        criteria_types = {}
-        target_values = {}
+    stock_names = df.iloc[:, 0]
+    data = df.iloc[:, 1:].copy()
 
-        for crit in criteria:
-            col1, col2 = st.columns([2, 2])
-            with col1:
-                ctype = st.selectbox(
-                    f"Type for '{crit}'",
-                    ["Benefit", "Cost", "Target"],
-                    key=f"type_{crit}"
-                )
-                criteria_types[crit] = ctype
-            with col2:
-                if ctype == "Target":
-                    tval = st.number_input(f"Target value for '{crit}'", key=f"target_{crit}")
-                    target_values[crit] = tval
+    st.subheader("Step 1: Define Criterion Type")
+    criteria = list(data.columns)
+    criterion_types = []
+    target_values = []
 
-        submitted = st.form_submit_button("Calculate Weights")
+    col1, col2, col3 = st.columns([3, 2, 2])
+    with col1:
+        st.markdown("**Criterion**")
+        for c in criteria:
+            st.text(c)
+    with col2:
+        st.markdown("**Type**")
+        for i, c in enumerate(criteria):
+            t = st.selectbox(f"Type of {c}", ["Benefit", "Cost", "Target"], key=f"type_{i}")
+            criterion_types.append(t)
+    with col3:
+        st.markdown("**Target Value (if Target)**")
+        for i, c in enumerate(criteria):
+            if criterion_types[i] == "Target":
+                target = st.number_input(f"Target for {c}", key=f"target_{i}")
+            else:
+                target = None
+            target_values.append(target)
 
-    if submitted:
-        st.subheader("Step 2: Normalization Based on Criteria Type")
+    if st.button("Calculate"):
+        # Step 2: Normalization
+        norm_data = pd.DataFrame(index=data.index, columns=data.columns)
+        for i, c in enumerate(criteria):
+            x = data[c].astype(float)
+            if criterion_types[i] == "Benefit":
+                norm = (x - x.min()) / (x.max() - x.min())
+            elif criterion_types[i] == "Cost":
+                norm = (x.max() - x) / (x.max() - x.min())
+            elif criterion_types[i] == "Target":
+                target = target_values[i]
+                d = abs(x - target)
+                d_max = d.max()
+                norm = 1 - (d / d_max)
+            norm = norm.replace(0, 0.001)  # avoid zero in next steps
+            norm_data[c] = norm
 
-        norm_df = df.copy()
-        for crit in criteria:
-            col = df[crit].astype(float)
-            if criteria_types[crit] == "Benefit":
-                norm_df[crit] = (col - col.min()) / (col.max() - col.min())
-            elif criteria_types[crit] == "Cost":
-                norm_df[crit] = (col.max() - col) / (col.max() - col.min())
-            elif criteria_types[crit] == "Target":
-                target = target_values[crit]
-                norm_df[crit] = 1 - abs(col - target) / (col.max() - col.min())
+        st.subheader("Step 2: Normalized Data")
+        st.dataframe(norm_data, use_container_width=True)
 
-        st.dataframe(norm_df)
+        # Step 3: Overall Performance Score
+        norm_data = norm_data.apply(pd.to_numeric, errors='coerce')
+        S = norm_data.sum(axis=1)
 
-        st.subheader("Step 3: Compute Removal Effects and Weights")
+        # Step 4: Recalculate Performance without Each Criterion
+        S_prime = pd.DataFrame(index=norm_data.index, columns=criteria)
+        for c in criteria:
+            S_prime[c] = norm_data.drop(columns=c).sum(axis=1)
 
-        scores_with_all = norm_df[criteria].mean(axis=1)
-        removal_effects = []
-        for crit in criteria:
-            temp_df = norm_df.drop(columns=crit)
-            avg_score = temp_df.mean(axis=1)
-            effect = abs(avg_score - scores_with_all).sum()
-            removal_effects.append(effect)
+        # Step 5: Calculate Removal Effects
+        E = {}
+        for c in criteria:
+            E[c] = np.abs(S - S_prime[c]).sum()
 
-        weights = np.array(removal_effects) / sum(removal_effects)
-        weight_df = pd.DataFrame({
-            "Criteria": criteria,
-            "Type": [criteria_types[c] for c in criteria],
-            "Weight": weights
-        })
+        # Step 6: Normalize Removal Effects into Weights
+        total_effect = sum(E.values())
+        weights = {c: E[c] / total_effect for c in criteria}
 
-        st.dataframe(weight_df)
+        # Display Final Weights
+        st.subheader("Final Objective Weights")
+        weight_df = pd.DataFrame.from_dict(weights, orient='index', columns=['Weight'])
+        weight_df = weight_df.sort_values(by='Weight', ascending=False)
+        st.dataframe(weight_df.style.format("{:.4f}"))
 
-        st.subheader("Step 4: Visualization")
-
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.bar(weight_df["Criteria"], weight_df["Weight"], color='orange')
-        ax.set_title("Z-MEREC Criteria Weights")
+        # Chart
+        fig, ax = plt.subplots()
+        ax.bar(weight_df.index, weight_df['Weight'])
         ax.set_ylabel("Weight")
-        ax.set_xlabel("Criteria")
-        plt.xticks(rotation=30)
+        ax.set_title("Criterion Importance Weights")
+        plt.xticks(rotation=45)
         st.pyplot(fig)
 
-        csv = weight_df.to_csv(index=False).encode('utf-8')
-        st.download_button("Download Weights as CSV", data=csv, file_name="zmerec_weights.csv", mime='text/csv')
+        # CSV Download
+        def convert_df(df):
+            return df.to_csv(index=True).encode('utf-8')
+
+        csv = convert_df(weight_df)
+        st.download_button(
+            label="Download Weights as CSV",
+            data=csv,
+            file_name='z_merec_weights.csv',
+            mime='text/csv',
+        )
