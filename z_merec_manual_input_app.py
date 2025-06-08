@@ -52,7 +52,7 @@ if uploaded_file:
 
     if st.button("Calculate"):
     # Step 2: Normalization
-    norm_data = pd.DataFrame(index=data.index, columns=data.columns)
+        norm_data = pd.DataFrame(index=data.index, columns=data.columns)
 
     for i, c in enumerate(criteria):
         x = data[c].astype(float)
