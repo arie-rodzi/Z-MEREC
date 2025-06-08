@@ -78,7 +78,6 @@ if uploaded_file:
     st.subheader("Step 2: Normalized Data")
     st.dataframe(norm_data, use_container_width=True)
 
-
         # Step 3: Overall Performance Score
         norm_data = norm_data.apply(pd.to_numeric, errors='coerce')
         S = norm_data.sum(axis=1)
