@@ -81,7 +81,12 @@ streamlit_app_code = textwrap.dedent("""
 
 # Save to file
 file_path = "/mnt/data/z_merec_app_fixed.py"
-with open(file_path, "w") as f:
+import io
+
+buffer = io.BytesIO()
+buffer.write(content.encode())
+st.download_button("Download CSV", buffer.getvalue(), "z_merec_weights.csv", "text/csv")
+
     f.write(streamlit_app_code)
 
 file_path
